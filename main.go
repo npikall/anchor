@@ -53,6 +53,7 @@ func main() {
 	cfg, err := parseFlags()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		flag.Usage()
 		os.Exit(1)
 	}
 
@@ -74,9 +75,9 @@ func main() {
 }
 
 func parseFlags() (config, error) {
-	updateFlag := flag.Bool("update", false, "pin to latest tag instead of current ref")
-	inPlaceFlag := flag.Bool("in-place", false, "overwrite file in place")
-	verboseFlag := flag.Bool("verbose", false, "warn about skipped local/docker actions")
+	updateFlag := flag.Bool("u", false, "pin to latest tag instead of current ref")
+	inPlaceFlag := flag.Bool("i", false, "overwrite file in place")
+	verboseFlag := flag.Bool("v", false, "warn about skipped local/docker actions")
 	flag.Parse()
 
 	if flag.NArg() < 1 || flag.Arg(0) == "help" {
