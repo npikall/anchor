@@ -177,7 +177,14 @@ func dispatchWorkers(ctx context.Context, cfg config, client *github.Client, wg 
 	resultMap := make(map[int]string)
 	var mu sync.Mutex
 
-	for range min(cfg.worker, runtime.NumCPU()) {
+	var n int
+	if cfg.worker >= 1 {
+		n = min(cfg.worker, runtime.NumCPU())
+	} else {
+		n = runtime.NumCPU()
+	}
+
+	for range n {
 		wg.Go(func() {
 			for j := range jobsCh {
 				newLine, jobErr := processJob(ctx, client, j)
