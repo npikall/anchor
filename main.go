@@ -50,6 +50,59 @@ type usesDirective struct {
 	ref      string
 }
 
+type resolvedRef struct {
+	sha     string
+	version string
+}
+
+type cache struct {
+	data map[string]*resolvedRef
+	mu   sync.Mutex
+}
+
+func NewCache() *cache {
+	return &cache{
+		data: make(map[string]*resolvedRef),
+	}
+}
+
+func (c *cache) Get(k string) (*resolvedRef, bool) {
+	c.mu.Lock()
+	val, found := c.data[k]
+	c.mu.Unlock()
+	return val, found
+}
+
+func (c *cache) Set(key string, val *resolvedRef) {
+	c.mu.Lock()
+	c.data[key] = val
+	c.mu.Unlock()
+}
+
+type ResultMap struct {
+	data map[int]string
+	mu   sync.Mutex
+}
+
+func NewResultMap() *ResultMap {
+	return &ResultMap{
+		data: make(map[int]string),
+	}
+}
+
+func (r *ResultMap) Get(k int) (string, bool) {
+	r.mu.Lock()
+	res, ok := r.data[k]
+	r.mu.Unlock()
+	return res, ok
+}
+
+func (r *ResultMap) Set(k int, v string) {
+	r.mu.Lock()
+	r.data[k] = v
+	r.mu.Unlock()
+}
+
 func main() {
 	cfg, err := parseFlags()
 	if err != nil {
@@ -95,7 +148,7 @@ func parseFlags() (config, error) {
 	}, nil
 }
 
-func resolveAllActions(ctx context.Context, client *github.Client, lines []string, cfg config) map[int]string {
+func resolveAllActions(ctx context.Context, client *github.Client, lines []string, cfg config) *ResultMap {
 	jobsCh := make(chan job)
 	var wg sync.WaitGroup
 	resultMap := dispatchWorkers(ctx, cfg, client, &wg, jobsCh)
@@ -149,10 +202,10 @@ func splitOwnerRepo(repoPath string) (string, string) {
 	return owner, repo
 }
 
-func buildOutput(lines []string, resultMap map[int]string) string {
+func buildOutput(lines []string, resultMap *ResultMap) string {
 	var sb strings.Builder
 	for i, line := range lines {
-		if newLine, ok := resultMap[i]; ok {
+		if newLine, ok := resultMap.Get(i); ok {
 			sb.WriteString(newLine)
 		} else {
 			sb.WriteString(line)
@@ -173,32 +226,52 @@ func writeOutput(filepath, content string, inPlace bool) error {
 	return nil
 }
 
-func dispatchWorkers(ctx context.Context, cfg config, client *github.Client, wg *sync.WaitGroup, jobsCh chan job) map[int]string {
-	resultMap := make(map[int]string)
-	var mu sync.Mutex
+func dispatchWorkers(ctx context.Context, cfg config, client *github.Client, wg *sync.WaitGroup, jobsCh chan job) *ResultMap {
+	resultMap := NewResultMap()
+	cache := NewCache()
+	n := getNumberOfWorkers(cfg)
 
+	for range n {
+		wg.Go(func() {
+			for j := range jobsCh {
+				resolveJob(ctx, client, j, cache, resultMap)
+			}
+		})
+	}
+	return resultMap
+}
+
+func getNumberOfWorkers(cfg config) int {
 	var n int
 	if cfg.worker >= 1 {
 		n = min(cfg.worker, runtime.NumCPU())
 	} else {
 		n = runtime.NumCPU()
 	}
+	return n
+}
 
-	for range n {
-		wg.Go(func() {
-			for j := range jobsCh {
-				newLine, jobErr := processJob(ctx, client, j)
-				if jobErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: %s/%s@%s: %v\n", j.owner, j.repo, j.ref, jobErr)
-					newLine = j.originalLine
-				}
-				mu.Lock()
-				resultMap[j.lineIdx] = newLine
-				mu.Unlock()
-			}
-		})
+func resolveJob(ctx context.Context, client *github.Client, j job, cache *cache, resultMap *ResultMap) {
+	key := j.repoPath + "@" + j.ref
+	entry, seen := cache.Get(key)
+	if seen {
+		if entry != nil {
+			val := j.linePrefix + j.repoPath + "@" + entry.sha + " # " + entry.version
+			resultMap.Set(j.lineIdx, val)
+		} else {
+			resultMap.Set(j.lineIdx, j.originalLine)
+		}
+		return
 	}
-	return resultMap
+	sha, version, err := resolveActionRef(ctx, client, j)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %s/%s@%s: %v\n", j.owner, j.repo, j.ref, err)
+		cache.Set(key, nil)
+		resultMap.Set(j.lineIdx, j.originalLine)
+	} else {
+		cache.Set(key, &resolvedRef{sha: sha, version: version})
+		resultMap.Set(j.lineIdx, j.linePrefix+j.repoPath+"@"+sha+" # "+version)
+	}
 }
 
 func setupGithubClient() *github.Client {
@@ -295,14 +368,6 @@ func findUsesKeyEnd(line string) int {
 
 func isSHA(ref string) bool {
 	return len(ref) == gitSHALength
-}
-
-func processJob(ctx context.Context, client *github.Client, j job) (string, error) {
-	sha, version, err := resolveActionRef(ctx, client, j)
-	if err != nil {
-		return j.originalLine, err
-	}
-	return j.linePrefix + j.repoPath + "@" + sha + " # " + version, nil
 }
 
 func resolveActionRef(ctx context.Context, client *github.Client, j job) (string, string, error) {
