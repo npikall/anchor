@@ -29,6 +29,7 @@ type config struct {
 	update  bool
 	inPlace bool
 	verbose bool
+	worker  int
 	file    string
 }
 
@@ -78,6 +79,7 @@ func parseFlags() (config, error) {
 	updateFlag := flag.Bool("u", false, "pin to latest tag instead of current ref")
 	inPlaceFlag := flag.Bool("i", false, "overwrite file in place")
 	verboseFlag := flag.Bool("v", false, "warn about skipped local/docker actions")
+	numWorkerFlag := flag.Int("n", 1, "number of concurrent workers")
 	flag.Parse()
 
 	if flag.NArg() < 1 || flag.Arg(0) == "help" {
@@ -88,6 +90,7 @@ func parseFlags() (config, error) {
 		update:  *updateFlag,
 		inPlace: *inPlaceFlag,
 		verbose: *verboseFlag,
+		worker:  *numWorkerFlag,
 		file:    flag.Arg(0),
 	}, nil
 }
@@ -95,7 +98,7 @@ func parseFlags() (config, error) {
 func resolveAllActions(ctx context.Context, client *github.Client, lines []string, cfg config) map[int]string {
 	jobsCh := make(chan job)
 	var wg sync.WaitGroup
-	resultMap := dispatchWorkers(ctx, client, &wg, jobsCh)
+	resultMap := dispatchWorkers(ctx, cfg, client, &wg, jobsCh)
 
 	go enqueueJobs(lines, jobsCh, cfg)
 	wg.Wait()
@@ -170,11 +173,11 @@ func writeOutput(filepath, content string, inPlace bool) error {
 	return nil
 }
 
-func dispatchWorkers(ctx context.Context, client *github.Client, wg *sync.WaitGroup, jobsCh chan job) map[int]string {
+func dispatchWorkers(ctx context.Context, cfg config, client *github.Client, wg *sync.WaitGroup, jobsCh chan job) map[int]string {
 	resultMap := make(map[int]string)
 	var mu sync.Mutex
 
-	for range runtime.NumCPU() {
+	for range min(cfg.worker, runtime.NumCPU()) {
 		wg.Go(func() {
 			for j := range jobsCh {
 				newLine, jobErr := processJob(ctx, client, j)
