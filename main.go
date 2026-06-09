@@ -57,7 +57,7 @@ type resolvedRef struct {
 
 type cache struct {
 	data map[string]*resolvedRef
-	mu   sync.Mutex
+	mu   sync.RWMutex
 }
 
 func NewCache() *cache {
@@ -67,9 +67,9 @@ func NewCache() *cache {
 }
 
 func (c *cache) Get(k string) (*resolvedRef, bool) {
-	c.mu.Lock()
+	c.mu.RLock()
 	val, found := c.data[k]
-	c.mu.Unlock()
+	c.mu.RUnlock()
 	return val, found
 }
 
@@ -81,7 +81,7 @@ func (c *cache) Set(key string, val *resolvedRef) {
 
 type ResultMap struct {
 	data map[int]string
-	mu   sync.Mutex
+	mu   sync.RWMutex
 }
 
 func NewResultMap() *ResultMap {
@@ -91,9 +91,9 @@ func NewResultMap() *ResultMap {
 }
 
 func (r *ResultMap) Get(k int) (string, bool) {
-	r.mu.Lock()
+	r.mu.RLock()
 	res, ok := r.data[k]
-	r.mu.Unlock()
+	r.mu.RUnlock()
 	return res, ok
 }
 
