@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v88/github"
 )
@@ -80,7 +81,7 @@ func TestRunPinsDirectoryInPlaceWithSharedRequest(t *testing.T) {
 	writeFile(t, second, "  uses: actions/checkout@v4\n")
 	writeFile(t, noActions, "version: 2") // No trailing newline: must stay untouched.
 
-	err := run(t.Context(), client, config{inPlace: true, workers: 2}, []string{dir}, &bytes.Buffer{})
+	err := run(t.Context(), client, nil, config{inPlace: true, workers: 2}, []string{dir}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +102,7 @@ func TestRunUpdateRequestsLatestTagOncePerRepo(t *testing.T) {
 	writeFile(t, first, "- uses: actions/checkout@v3\n")
 	writeFile(t, second, "- uses: actions/checkout@"+checkoutSHA+" # v4\n")
 
-	err := run(t.Context(), client, config{update: true, inPlace: true}, []string{first, second}, &bytes.Buffer{})
+	err := run(t.Context(), client, nil, config{update: true, inPlace: true}, []string{first, second}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +129,7 @@ func TestRunUpdatePicksHighestSemverTagAcrossPages(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ci.yml")
 	writeFile(t, path, "- uses: taiki-e/install-action@v2\n")
 
-	err := run(t.Context(), newTestClient(t, mux), config{update: true, inPlace: true}, []string{path}, &bytes.Buffer{})
+	err := run(t.Context(), newTestClient(t, mux), nil, config{update: true, inPlace: true}, []string{path}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestRunUpdateLeavesActionWithoutSemverTagsUnchanged(t *testing.T) {
 	original := "- uses: acme/named@main\n"
 	writeFile(t, path, original)
 
-	err := run(t.Context(), newTestClient(t, mux), config{update: true, inPlace: true}, []string{path}, &bytes.Buffer{})
+	err := run(t.Context(), newTestClient(t, mux), nil, config{update: true, inPlace: true}, []string{path}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +187,7 @@ func TestRunPrintsWithoutModifyingFiles(t *testing.T) {
 	pinned := "- uses: actions/checkout@" + checkoutSHA + " # v4\n"
 
 	var multiple bytes.Buffer
-	if err := run(t.Context(), client, config{}, []string{first, second}, &multiple); err != nil {
+	if err := run(t.Context(), client, nil, config{}, []string{first, second}, &multiple); err != nil {
 		t.Fatal(err)
 	}
 	want := "# " + first + "\n" + pinned + "# " + second + "\n" + pinned
@@ -196,7 +197,7 @@ func TestRunPrintsWithoutModifyingFiles(t *testing.T) {
 	assertFile(t, first, original)
 
 	var single bytes.Buffer
-	if err := run(t.Context(), client, config{}, []string{first}, &single); err != nil {
+	if err := run(t.Context(), client, nil, config{}, []string{first}, &single); err != nil {
 		t.Fatal(err)
 	}
 	if single.String() != pinned {
@@ -214,7 +215,7 @@ func TestRunWritesNothingWhenAFileCannotBeRead(t *testing.T) {
 	bad := filepath.Join(dir, "z.yml")
 	writeFile(t, bad, badLine)
 
-	if err := run(t.Context(), client, config{inPlace: true}, []string{dir}, &bytes.Buffer{}); err == nil {
+	if err := run(t.Context(), client, nil, config{inPlace: true}, []string{dir}, &bytes.Buffer{}); err == nil {
 		t.Fatal("expected error")
 	}
 	assertFile(t, valid, original)
@@ -237,7 +238,7 @@ func TestRunHandlesQuotedValues(t *testing.T) {
 			writeFile(t, path, tt.input+"\n")
 
 			var out bytes.Buffer
-			if err := run(t.Context(), client, config{}, []string{path}, &out); err != nil {
+			if err := run(t.Context(), client, nil, config{}, []string{path}, &out); err != nil {
 				t.Fatal(err)
 			}
 			if want := tt.want + "\n"; out.String() != want {
@@ -323,5 +324,158 @@ func TestProgressBarWithoutItemsDrawsNothing(t *testing.T) {
 
 	if out.String() != "" {
 		t.Errorf("got %q, want no output", out.String())
+	}
+}
+
+// runOnFile runs anchor on a new file with the given content and returns what it printed.
+func runOnFile(t *testing.T, client *github.Client, store *cache, cfg config, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ci.yml")
+	writeFile(t, path, content)
+	var out bytes.Buffer
+	if err := run(t.Context(), client, store, cfg, []string{path}, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+func TestRunReusesCachedActionsInLaterRuns(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		cfg   config
+		input string
+		want  string
+	}{
+		{"ref", config{}, "- uses: actions/checkout@v4\n", "- uses: actions/checkout@" + checkoutSHA + " # v4\n"},
+		{"latest tag", config{update: true}, "- uses: actions/checkout@v4\n", "- uses: actions/checkout@" + latestSHA + " # v5\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, requests := fakeGithub(t)
+			store := openTestCache(t)
+
+			for range 2 {
+				if got := runOnFile(t, client, store, tt.cfg, tt.input); got != tt.want {
+					t.Errorf("got %q, want %q", got, tt.want)
+				}
+			}
+			if got := requests.Load(); got != 1 {
+				t.Errorf("requests = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestRunRequestsOnlyActionsMissingFromCache(t *testing.T) {
+	t.Parallel()
+	client, requests := fakeGithub(t)
+	store := openTestCache(t)
+	cached := map[target]resolvedRef{{owner: "acme", repo: "cached", ref: "v1"}: {sha: latestSHA, version: "v1"}}
+	if err := store.save(t.Context(), cached, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runOnFile(t, client, store, config{}, "- uses: acme/cached@v1\n- uses: actions/checkout@v4\n")
+
+	want := "- uses: acme/cached@" + latestSHA + " # v1\n- uses: actions/checkout@" + checkoutSHA + " # v4\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("requests = %d, want 1", got)
+	}
+}
+
+func TestRunRequestsExpiredActionAgain(t *testing.T) {
+	t.Parallel()
+	client, requests := fakeGithub(t)
+	store := openTestCache(t)
+	action := target{owner: "actions", repo: "checkout", ref: "v4"}
+	expired := time.Now().Add(-movingRefTTL)
+	if err := store.save(t.Context(), map[target]resolvedRef{action: {sha: latestSHA, version: "v4"}}, expired); err != nil {
+		t.Fatal(err)
+	}
+	want := "- uses: actions/checkout@" + checkoutSHA + " # v4\n"
+
+	for range 2 { // The second run must find the renewed entry.
+		if got := runOnFile(t, client, store, config{}, "- uses: actions/checkout@v4\n"); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("requests = %d, want 1", got)
+	}
+}
+
+func TestRunRefreshIgnoresCacheAndReplacesEntry(t *testing.T) {
+	t.Parallel()
+	client, requests := fakeGithub(t)
+	store := openTestCache(t)
+	action := target{owner: "actions", repo: "checkout", ref: "v4"}
+	if err := store.save(t.Context(), map[target]resolvedRef{action: {sha: latestSHA, version: "v4"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	want := "- uses: actions/checkout@" + checkoutSHA + " # v4\n"
+
+	for _, cfg := range []config{{refresh: true}, {}} {
+		if got := runOnFile(t, client, store, cfg, "- uses: actions/checkout@v4\n"); got != want {
+			t.Errorf("refresh=%v: got %q, want %q", cfg.refresh, got, want)
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("requests = %d, want 1", got)
+	}
+}
+
+func TestRunDoesNotCacheFailures(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	store := openTestCache(t)
+	input := "- uses: acme/missing@v1\n"
+
+	if got := runOnFile(t, client, store, config{}, input); got != input {
+		t.Errorf("got %q, want %q", got, input)
+	}
+	afterFirstRun := requests.Load()
+	runOnFile(t, client, store, config{}, input)
+
+	if got := requests.Load(); got != 2*afterFirstRun {
+		t.Errorf("requests = %d, want %d", got, 2*afterFirstRun)
+	}
+}
+
+func TestRunWarnsAndStillPinsWhenCacheFails(t *testing.T) {
+	stderr, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+	realStderr := os.Stderr
+	os.Stderr = stderr
+	t.Cleanup(func() { os.Stderr = realStderr })
+
+	client, _ := fakeGithub(t)
+	store := openTestCache(t)
+	store.close() // Every query fails from now on.
+
+	got := runOnFile(t, client, store, config{}, "- uses: actions/checkout@v4\n")
+
+	if want := "- uses: actions/checkout@" + checkoutSHA + " # v4\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	warnings, err := os.ReadFile(stderr.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"warning: reading cache: ", "warning: writing cache: "} {
+		if !strings.Contains(string(warnings), want) {
+			t.Errorf("stderr %q does not contain %q", warnings, want)
+		}
 	}
 }

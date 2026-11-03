@@ -6,6 +6,7 @@ type config struct {
 	update  bool
 	inPlace bool
 	verbose bool
+	refresh bool
 	workers int
 }
 
@@ -22,13 +23,16 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return run(cmd.Context(), client, cfg, args, cmd.OutOrStdout())
+			store := openDefaultCache(cmd.Context(), cmd.ErrOrStderr())
+			defer store.close()
+			return run(cmd.Context(), client, store, cfg, args, cmd.OutOrStdout())
 		},
 	}
 	flags := cmd.Flags()
 	flags.BoolVarP(&cfg.update, "update", "u", false, "pin to latest tag instead of current ref")
 	flags.BoolVarP(&cfg.inPlace, "in-place", "i", false, "overwrite files in place")
 	flags.BoolVarP(&cfg.verbose, "verbose", "v", false, "warn about skipped local/docker actions")
+	flags.BoolVarP(&cfg.refresh, "refresh", "r", false, "request all actions again instead of reusing cached hashes")
 	flags.IntVarP(&cfg.workers, "workers", "n", 1, "number of concurrent workers")
 	return cmd
 }

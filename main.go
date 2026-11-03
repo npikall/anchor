@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
+	"time"
 
 	"charm.land/fang/v2"
 	"github.com/google/go-github/v88/github"
@@ -24,7 +27,7 @@ func main() {
 
 // run pins the actions of all files found in args. No file is written until
 // every file has been read and every action has been resolved.
-func run(ctx context.Context, client *github.Client, cfg config, args []string, stdout io.Writer) error {
+func run(ctx context.Context, client *github.Client, store *cache, cfg config, args []string, stdout io.Writer) error {
 	paths, err := collectFiles(args)
 	if err != nil {
 		return err
@@ -41,10 +44,7 @@ func run(ctx context.Context, client *github.Client, cfg config, args []string, 
 		targets = append(targets, wf.targets()...)
 	}
 
-	bar := newProgressBar(os.Stderr, isTerminal(os.Stderr))
-	resolver := newResolver(client, bar, cfg.workers)
-	resolver.submit(ctx, targets)
-	resolved := resolver.wait()
+	resolved := resolveTargets(ctx, client, store, cfg, targets)
 
 	for _, wf := range workflows {
 		changed := wf.pin(resolved)
@@ -53,4 +53,37 @@ func run(ctx context.Context, client *github.Client, cfg config, args []string, 
 		}
 	}
 	return nil
+}
+
+// resolveTargets asks GitHub only for targets the cache cannot answer. Failing
+// to read or write the cache costs requests, but never the result.
+func resolveTargets(ctx context.Context, client *github.Client, store *cache, cfg config, targets []target) map[target]resolvedRef {
+	resolved := reusableEntries(ctx, store, cfg)
+	missing := slices.DeleteFunc(targets, func(t target) bool {
+		_, ok := resolved[t]
+		return ok
+	})
+
+	bar := newProgressBar(os.Stderr, isTerminal(os.Stderr))
+	resolver := newResolver(client, bar, cfg.workers)
+	resolver.submit(ctx, missing)
+	fresh := resolver.wait()
+
+	if err := store.save(ctx, fresh, time.Now()); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+	maps.Copy(resolved, fresh)
+	return resolved
+}
+
+func reusableEntries(ctx context.Context, store *cache, cfg config) map[target]resolvedRef {
+	if cfg.refresh {
+		return make(map[target]resolvedRef)
+	}
+	entries, err := store.load(ctx, time.Now())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		return make(map[target]resolvedRef)
+	}
+	return entries
 }
