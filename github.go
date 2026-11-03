@@ -124,12 +124,16 @@ func isNewerTag(name, current string) bool {
 // stableSemver returns the tag in the v-prefixed form the semver package expects.
 // Named tags and prereleases are not stable versions.
 func stableSemver(tag string) (string, bool) {
-	version := tag
-	if !strings.HasPrefix(version, "v") {
-		version = "v" + version
-	}
+	version := withVPrefix(tag)
 	if !semver.IsValid(version) || semver.Prerelease(version) != "" {
 		return "", false
 	}
 	return version, true
+}
+
+func withVPrefix(tag string) string {
+	if strings.HasPrefix(tag, "v") {
+		return tag
+	}
+	return "v" + tag
 }
