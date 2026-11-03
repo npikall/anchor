@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/google/go-github/v88/github"
+	"github.com/google/go-github/v93/github"
 	"golang.org/x/sync/errgroup"
 )
 

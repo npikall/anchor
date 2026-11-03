@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"charm.land/fang/v2"
-	"github.com/google/go-github/v88/github"
+	"github.com/google/go-github/v93/github"
 )
 
 // variables set during comptime
