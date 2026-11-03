@@ -74,7 +74,7 @@ func (p *progressBar) draw() {
 		return
 	}
 	filled := progressBarWidth * p.done / p.total
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", progressBarWidth-filled)
+	bar := "[" + strings.Repeat("█", filled) + strings.Repeat("░", progressBarWidth-filled) + "]"
 	_, _ = fmt.Fprintf(p.w, "\rresolving actions %s %d/%d", bar, p.done, p.total)
 }
 

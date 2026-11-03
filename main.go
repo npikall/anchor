@@ -13,12 +13,20 @@ import (
 	"github.com/google/go-github/v88/github"
 )
 
+// variables set during comptime
+var (
+	commit  string
+	version string
+)
+
 func main() {
 	err := fang.Execute(
 		context.Background(),
 		newRootCmd(),
 		fang.WithColorSchemeFunc(fang.AnsiColorScheme),
+		fang.WithCommit(commit),
 		fang.WithoutManpage(),
+		fang.WithVersion(version),
 	)
 	if err != nil {
 		os.Exit(1)

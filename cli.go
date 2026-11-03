@@ -14,9 +14,9 @@ func newRootCmd() *cobra.Command {
 	var cfg config
 	cmd := &cobra.Command{
 		Use:   "anchor [flags] <file-or-directory>...",
-		Short: "Pin GitHub Actions uses: directives to their exact commit SHA",
-		Long: "Pin GitHub Actions uses: directives to their exact commit SHA.\n\n" +
-			"Directories are searched recursively for .yml and .yaml files.",
+		Short: "Anchor GitHub Actions to their exact commit SHA",
+		Long: `Anchor GitHub Actions to their exact commit SHA.
+Directories are searched recursively for .yml and .yaml files.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := setupGithubClient()

@@ -1,7 +1,14 @@
 _default:
     @just --list
 
-ldflags := "-s -w"
+alias b := build
+alias i := install
+alias l := lint
+alias t := test
+
+commit := " -X main.commit=" + `git rev-parse --short HEAD`
+version := " -X main.version=dev-" + `date -u +%Y-%m`
+ldflags := "-s -w" + commit + version
 
 # build the binary
 build:
@@ -11,6 +18,10 @@ build:
 install:
     go install -ldflags="{{ ldflags }}"
 
+# run the tests
+test:
+    gotestsum ./...
+
 # run the linter
-lint:
-    golangci-lint run
+lint *args:
+    golangci-lint run {{ args }}
