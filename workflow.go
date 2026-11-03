@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -25,7 +26,7 @@ type usesLine struct {
 	target   target
 }
 
-func loadWorkflow(path string, cfg config) (*workflow, error) {
+func loadWorkflow(path string, cfg config, stderr io.Writer) (*workflow, error) {
 	lines, err := readLines(path)
 	if err != nil {
 		return nil, err
@@ -35,7 +36,7 @@ func loadWorkflow(path string, cfg config) (*workflow, error) {
 		if use, ok := lineToUses(i, line, cfg); ok {
 			wf.uses = append(wf.uses, use)
 		} else if cfg.verbose && isLocalUses(line) {
-			fmt.Fprintf(os.Stderr, "skipping %s:%d: %s\n", path, i+1, strings.TrimSpace(line))
+			_, _ = fmt.Fprintf(stderr, "skipping %s:%d: %s\n", path, i+1, strings.TrimSpace(line))
 		}
 	}
 	return wf, nil
@@ -99,24 +100,28 @@ func (w *workflow) write(stdout io.Writer, changed, inPlace, withHeader bool) er
 		if !changed {
 			return nil
 		}
-		return os.WriteFile(w.path, []byte(content), filePermOwnerRW)
+		if err := os.WriteFile(w.path, []byte(content), filePermOwnerRW); err != nil {
+			return fmt.Errorf("writing %q: %w", w.path, err)
+		}
+		return nil
 	}
 	if withHeader {
 		content = "# " + w.path + "\n" + content
 	}
-	_, err := io.WriteString(stdout, content)
-	return err
+	if _, err := io.WriteString(stdout, content); err != nil {
+		return fmt.Errorf("writing %q: %w", w.path, err)
+	}
+	return nil
 }
 
 func readLines(path string) ([]string, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: reading the files the user names is the purpose of this tool.
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading workflow: %w", err)
 	}
-	defer f.Close()
 
 	var lines []string
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}

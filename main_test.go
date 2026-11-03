@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -72,6 +76,7 @@ func assertFile(t *testing.T, path, want string) {
 }
 
 func TestRunPinsDirectoryInPlaceWithSharedRequest(t *testing.T) {
+	t.Parallel()
 	client, requests := fakeGithub(t)
 	dir := t.TempDir()
 	first := filepath.Join(dir, "ci.yml")
@@ -81,7 +86,7 @@ func TestRunPinsDirectoryInPlaceWithSharedRequest(t *testing.T) {
 	writeFile(t, second, "  uses: actions/checkout@v4\n")
 	writeFile(t, noActions, "version: 2") // No trailing newline: must stay untouched.
 
-	err := run(t.Context(), client, nil, config{inPlace: true, workers: 2}, []string{dir}, &bytes.Buffer{})
+	err := run(t.Context(), client, nil, config{inPlace: true, workers: 2}, []string{dir}, &bytes.Buffer{}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +100,7 @@ func TestRunPinsDirectoryInPlaceWithSharedRequest(t *testing.T) {
 }
 
 func TestRunUpdateRequestsLatestTagOncePerRepo(t *testing.T) {
+	t.Parallel()
 	client, requests := fakeGithub(t)
 	dir := t.TempDir()
 	first := filepath.Join(dir, "a.yml")
@@ -102,7 +108,7 @@ func TestRunUpdateRequestsLatestTagOncePerRepo(t *testing.T) {
 	writeFile(t, first, "- uses: actions/checkout@v3\n")
 	writeFile(t, second, "- uses: actions/checkout@"+checkoutSHA+" # v4\n")
 
-	err := run(t.Context(), client, nil, config{update: true, inPlace: true}, []string{first, second}, &bytes.Buffer{})
+	err := run(t.Context(), client, nil, config{update: true, inPlace: true}, []string{first, second}, &bytes.Buffer{}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +122,7 @@ func TestRunUpdateRequestsLatestTagOncePerRepo(t *testing.T) {
 }
 
 func TestRunUpdatePicksHighestSemverTagAcrossPages(t *testing.T) {
+	t.Parallel()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/taiki-e/install-action/tags", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("page") == "2" {
@@ -129,7 +136,7 @@ func TestRunUpdatePicksHighestSemverTagAcrossPages(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ci.yml")
 	writeFile(t, path, "- uses: taiki-e/install-action@v2\n")
 
-	err := run(t.Context(), newTestClient(t, mux), nil, config{update: true, inPlace: true}, []string{path}, &bytes.Buffer{})
+	err := run(t.Context(), newTestClient(t, mux), nil, config{update: true, inPlace: true}, []string{path}, &bytes.Buffer{}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +145,7 @@ func TestRunUpdatePicksHighestSemverTagAcrossPages(t *testing.T) {
 }
 
 func TestRunUpdateLeavesActionWithoutSemverTagsUnchanged(t *testing.T) {
+	t.Parallel()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/acme/named/tags", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `[{"name":"nightly","commit":{"sha":%q}}]`, latestSHA)
@@ -146,7 +154,7 @@ func TestRunUpdateLeavesActionWithoutSemverTagsUnchanged(t *testing.T) {
 	original := "- uses: acme/named@main\n"
 	writeFile(t, path, original)
 
-	err := run(t.Context(), newTestClient(t, mux), nil, config{update: true, inPlace: true}, []string{path}, &bytes.Buffer{})
+	err := run(t.Context(), newTestClient(t, mux), nil, config{update: true, inPlace: true}, []string{path}, &bytes.Buffer{}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,6 +163,7 @@ func TestRunUpdateLeavesActionWithoutSemverTagsUnchanged(t *testing.T) {
 }
 
 func TestIsNewerTag(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, current string
 		want          bool
@@ -177,6 +186,7 @@ func TestIsNewerTag(t *testing.T) {
 }
 
 func TestRunPrintsWithoutModifyingFiles(t *testing.T) {
+	t.Parallel()
 	client, _ := fakeGithub(t)
 	dir := t.TempDir()
 	first := filepath.Join(dir, "a.yml")
@@ -187,7 +197,7 @@ func TestRunPrintsWithoutModifyingFiles(t *testing.T) {
 	pinned := "- uses: actions/checkout@" + checkoutSHA + " # v4\n"
 
 	var multiple bytes.Buffer
-	if err := run(t.Context(), client, nil, config{}, []string{first, second}, &multiple); err != nil {
+	if err := run(t.Context(), client, nil, config{}, []string{first, second}, &multiple, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	want := "# " + first + "\n" + pinned + "# " + second + "\n" + pinned
@@ -197,7 +207,7 @@ func TestRunPrintsWithoutModifyingFiles(t *testing.T) {
 	assertFile(t, first, original)
 
 	var single bytes.Buffer
-	if err := run(t.Context(), client, nil, config{}, []string{first}, &single); err != nil {
+	if err := run(t.Context(), client, nil, config{}, []string{first}, &single, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if single.String() != pinned {
@@ -206,6 +216,7 @@ func TestRunPrintsWithoutModifyingFiles(t *testing.T) {
 }
 
 func TestRunWritesNothingWhenAFileCannotBeRead(t *testing.T) {
+	t.Parallel()
 	client, _ := fakeGithub(t)
 	dir := t.TempDir()
 	valid := filepath.Join(dir, "valid.yml")
@@ -215,13 +226,14 @@ func TestRunWritesNothingWhenAFileCannotBeRead(t *testing.T) {
 	bad := filepath.Join(dir, "z.yml")
 	writeFile(t, bad, badLine)
 
-	if err := run(t.Context(), client, nil, config{inPlace: true}, []string{dir}, &bytes.Buffer{}); err == nil {
+	if err := run(t.Context(), client, nil, config{inPlace: true}, []string{dir}, &bytes.Buffer{}, io.Discard); err == nil {
 		t.Fatal("expected error")
 	}
 	assertFile(t, valid, original)
 }
 
 func TestRunHandlesQuotedValues(t *testing.T) {
+	t.Parallel()
 	pinned := "actions/checkout@" + checkoutSHA
 	tests := []struct{ name, input, want string }{
 		{"double quotes", `- uses: "actions/checkout@v4"`, `- uses: "` + pinned + `" # v4`},
@@ -233,12 +245,13 @@ func TestRunHandlesQuotedValues(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			client, _ := fakeGithub(t)
 			path := filepath.Join(t.TempDir(), "ci.yml")
 			writeFile(t, path, tt.input+"\n")
 
 			var out bytes.Buffer
-			if err := run(t.Context(), client, nil, config{}, []string{path}, &out); err != nil {
+			if err := run(t.Context(), client, nil, config{}, []string{path}, &out, io.Discard); err != nil {
 				t.Fatal(err)
 			}
 			if want := tt.want + "\n"; out.String() != want {
@@ -249,6 +262,7 @@ func TestRunHandlesQuotedValues(t *testing.T) {
 }
 
 func TestCollectFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	workflow := filepath.Join(dir, "workflows", "ci.yml")
 	action := filepath.Join(dir, "actions", "x", "action.yaml")
@@ -270,12 +284,44 @@ func TestCollectFiles(t *testing.T) {
 }
 
 func TestCollectFilesErrors(t *testing.T) {
+	t.Parallel()
 	empty := t.TempDir()
 	missing := filepath.Join(empty, "missing.yml")
-	for _, arg := range []string{empty, missing} {
-		if _, err := collectFiles([]string{arg}); err == nil {
-			t.Errorf("collectFiles(%q): expected error", arg)
+	tests := []struct {
+		arg  string
+		want error
+	}{
+		{empty, errNoYAMLFiles},
+		{missing, fs.ErrNotExist},
+	}
+	for _, tt := range tests {
+		if _, err := collectFiles([]string{tt.arg}); !errors.Is(err, tt.want) {
+			t.Errorf("collectFiles(%q) = %v, want %v", tt.arg, err, tt.want)
 		}
+	}
+}
+
+func TestLoadWorkflowReportsMissingFile(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "missing.yml")
+	if _, err := loadWorkflow(missing, config{}, io.Discard); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("got %v, want %v", err, fs.ErrNotExist)
+	}
+}
+
+func TestRunReportsFileItCannotWrite(t *testing.T) {
+	t.Parallel()
+	client, _ := fakeGithub(t)
+	path := filepath.Join(t.TempDir(), "ci.yml")
+	writeFile(t, path, "- uses: actions/checkout@v4\n")
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+
+	err := run(t.Context(), client, nil, config{inPlace: true}, []string{path}, io.Discard, io.Discard)
+
+	if !errors.Is(err, fs.ErrPermission) || !strings.Contains(err.Error(), "writing "+strconv.Quote(path)) {
+		t.Errorf("got %v, want permission error naming %q", err, path)
 	}
 }
 
@@ -333,7 +379,7 @@ func runOnFile(t *testing.T, client *github.Client, store *cache, cfg config, co
 	path := filepath.Join(t.TempDir(), "ci.yml")
 	writeFile(t, path, content)
 	var out bytes.Buffer
-	if err := run(t.Context(), client, store, cfg, []string{path}, &out); err != nil {
+	if err := run(t.Context(), client, store, cfg, []string{path}, &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	return out.String()
@@ -451,31 +497,84 @@ func TestRunDoesNotCacheFailures(t *testing.T) {
 }
 
 func TestRunWarnsAndStillPinsWhenCacheFails(t *testing.T) {
-	stderr, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stderr.Close()
-	realStderr := os.Stderr
-	os.Stderr = stderr
-	t.Cleanup(func() { os.Stderr = realStderr })
-
+	t.Parallel()
 	client, _ := fakeGithub(t)
 	store := openTestCache(t)
 	store.close() // Every query fails from now on.
+	path := filepath.Join(t.TempDir(), "ci.yml")
+	writeFile(t, path, "- uses: actions/checkout@v4\n")
 
-	got := runOnFile(t, client, store, config{}, "- uses: actions/checkout@v4\n")
-
-	if want := "- uses: actions/checkout@" + checkoutSHA + " # v4\n"; got != want {
-		t.Errorf("got %q, want %q", got, want)
+	var out, warnings bytes.Buffer
+	if err := run(t.Context(), client, store, config{}, []string{path}, &out, &warnings); err != nil {
+		t.Fatal(err)
 	}
-	warnings, err := os.ReadFile(stderr.Name())
+
+	if want := "- uses: actions/checkout@" + checkoutSHA + " # v4\n"; out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+	for _, want := range []string{"warning: reading cache: ", "warning: writing cache: "} {
+		if !strings.Contains(warnings.String(), want) {
+			t.Errorf("stderr %q does not contain %q", warnings.String(), want)
+		}
+	}
+}
+
+func TestRunVerboseReportsSkippedLocalActions(t *testing.T) {
+	t.Parallel()
+	client, _ := fakeGithub(t)
+	path := filepath.Join(t.TempDir(), "ci.yml")
+	writeFile(t, path, "- uses: ./local\n")
+
+	var warnings bytes.Buffer
+	if err := run(t.Context(), client, nil, config{verbose: true}, []string{path}, io.Discard, &warnings); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "skipping " + path + ":1: - uses: ./local\n"; warnings.String() != want {
+		t.Errorf("got %q, want %q", warnings.String(), want)
+	}
+}
+
+func TestSetupGithubClientAuthenticatesWithToken(t *testing.T) {
+	tests := []struct{ name, token, want string }{
+		{"with token", "secret", "Bearer secret"},
+		{"without token", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GITHUB_TOKEN", tt.token)
+			var got string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Get("Authorization")
+				_, _ = io.WriteString(w, "[]")
+			}))
+			t.Cleanup(server.Close)
+
+			baseURL := server.URL + "/"
+			client, err := setupGithubClient(github.WithURLs(&baseURL, &baseURL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := client.Repositories.ListTags(t.Context(), "acme", "repo", nil); err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Errorf("Authorization = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsTerminalIsFalseForNonTerminals(t *testing.T) {
+	t.Parallel()
+	file, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"warning: reading cache: ", "warning: writing cache: "} {
-		if !strings.Contains(string(warnings), want) {
-			t.Errorf("stderr %q does not contain %q", warnings, want)
+	defer file.Close()
+	for _, w := range []io.Writer{file, &bytes.Buffer{}} {
+		if isTerminal(w) {
+			t.Errorf("isTerminal(%T) = true, want false", w)
 		}
 	}
 }

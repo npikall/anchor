@@ -40,12 +40,15 @@ type resolvedRef struct {
 	version string
 }
 
-func setupGithubClient() (*github.Client, error) {
-	opts := []github.ClientOptionsFunc{}
+func setupGithubClient(opts ...github.ClientOptionsFunc) (*github.Client, error) {
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		opts = append(opts, github.WithAuthToken(token))
 	}
-	return github.NewClient(opts...)
+	client, err := github.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("creating github client: %w", err)
+	}
+	return client, nil
 }
 
 func resolveTarget(ctx context.Context, client *github.Client, t target) (resolvedRef, error) {

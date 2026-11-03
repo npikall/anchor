@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
+
+var errNoYAMLFiles = errors.New("no .yml or .yaml files")
 
 // collectFiles expands args into a deduplicated list of file paths. Files are
 // taken as given, directories are searched recursively for YAML files.
@@ -31,7 +34,7 @@ func collectFiles(args []string) ([]string, error) {
 func expandArg(arg string) ([]string, error) {
 	info, err := os.Stat(arg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("checking path: %w", err)
 	}
 	if !info.IsDir() {
 		return []string{arg}, nil
@@ -41,7 +44,7 @@ func expandArg(arg string) ([]string, error) {
 		return nil, err
 	}
 	if len(found) == 0 {
-		return nil, fmt.Errorf("no .yml or .yaml files in %q", arg)
+		return nil, fmt.Errorf("%w in %q", errNoYAMLFiles, arg)
 	}
 	return found, nil
 }
@@ -63,5 +66,8 @@ func findYAMLFiles(root string) ([]string, error) {
 		}
 		return nil
 	})
-	return found, err
+	if err != nil {
+		return nil, fmt.Errorf("searching %q: %w", root, err)
+	}
+	return found, nil
 }

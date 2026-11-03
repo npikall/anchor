@@ -78,7 +78,11 @@ func (p *progressBar) draw() {
 	_, _ = fmt.Fprintf(p.w, "\rresolving actions %s %d/%d", bar, p.done, p.total)
 }
 
-func isTerminal(f *os.File) bool {
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
 	info, err := f.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

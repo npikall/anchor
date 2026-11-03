@@ -25,7 +25,7 @@ Directories are searched recursively for .yml and .yaml files.`,
 			}
 			store := openDefaultCache(cmd.Context(), cmd.ErrOrStderr())
 			defer store.close()
-			return run(cmd.Context(), client, store, cfg, args, cmd.OutOrStdout())
+			return run(cmd.Context(), client, store, cfg, args, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 	flags := cmd.Flags()
