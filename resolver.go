@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"runtime"
 	"sync"
 
@@ -12,19 +10,19 @@ import (
 )
 
 // resolver resolves targets concurrently and requests each one only once, no
-// matter how many files use it. submit and wait must be called from one goroutine.
+// matter how many files use it. submit must be called once, followed by wait.
 type resolver struct {
 	client   *github.Client
+	bar      *progressBar
 	group    errgroup.Group
-	seen     map[target]struct{}
 	mu       sync.Mutex
 	resolved map[target]resolvedRef
 }
 
-func newResolver(client *github.Client, workers int) *resolver {
+func newResolver(client *github.Client, bar *progressBar, workers int) *resolver {
 	r := &resolver{
 		client:   client,
-		seen:     make(map[target]struct{}),
+		bar:      bar,
 		resolved: make(map[target]resolvedRef),
 	}
 	r.group.SetLimit(numberOfWorkers(workers))
@@ -32,11 +30,9 @@ func newResolver(client *github.Client, workers int) *resolver {
 }
 
 func (r *resolver) submit(ctx context.Context, targets []target) {
-	for _, t := range targets {
-		if _, dup := r.seen[t]; dup {
-			continue
-		}
-		r.seen[t] = struct{}{}
+	unique := uniqueTargets(targets)
+	r.bar.start(len(unique))
+	for _, t := range unique {
 		r.group.Go(func() error {
 			r.resolve(ctx, t)
 			return nil
@@ -45,9 +41,10 @@ func (r *resolver) submit(ctx context.Context, targets []target) {
 }
 
 func (r *resolver) resolve(ctx context.Context, t target) {
+	defer r.bar.advance()
 	ref, err := resolveTarget(ctx, r.client, t)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %s: %v\n", t, err)
+		r.bar.printf("warning: %s: %v\n", t, err)
 		return
 	}
 	r.mu.Lock()
@@ -59,7 +56,20 @@ func (r *resolver) resolve(ctx context.Context, t target) {
 // resolved are missing from the result.
 func (r *resolver) wait() map[target]resolvedRef {
 	_ = r.group.Wait() // Workers warn about failures and never return an error.
+	r.bar.finish()
 	return r.resolved
+}
+
+func uniqueTargets(targets []target) []target {
+	seen := make(map[target]struct{}, len(targets))
+	unique := make([]target, 0, len(targets))
+	for _, t := range targets {
+		if _, dup := seen[t]; !dup {
+			seen[t] = struct{}{}
+			unique = append(unique, t)
+		}
+	}
+	return unique
 }
 
 func numberOfWorkers(workers int) int {

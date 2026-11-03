@@ -277,3 +277,51 @@ func TestCollectFilesErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestProgressBarDrawsAndClears(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	bar := newProgressBar(&out, true)
+
+	bar.start(2)
+	bar.advance()
+	if !strings.HasSuffix(out.String(), " 1/2") {
+		t.Errorf("after advance: got %q", out.String())
+	}
+	bar.printf("warning: %s\n", "oops")
+	if !strings.Contains(out.String(), clearLine+"warning: oops\n\r") {
+		t.Errorf("warning must replace the bar and the bar must follow: got %q", out.String())
+	}
+	bar.finish()
+	if !strings.HasSuffix(out.String(), clearLine) {
+		t.Errorf("after finish: got %q", out.String())
+	}
+}
+
+func TestProgressBarDisabledOnlyPrintsMessages(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	bar := newProgressBar(&out, false)
+
+	bar.start(1)
+	bar.printf("warning: %s\n", "oops")
+	bar.advance()
+	bar.finish()
+
+	if got, want := out.String(), "warning: oops\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestProgressBarWithoutItemsDrawsNothing(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	bar := newProgressBar(&out, true)
+
+	bar.start(0)
+	bar.finish()
+
+	if out.String() != "" {
+		t.Errorf("got %q, want no output", out.String())
+	}
+}

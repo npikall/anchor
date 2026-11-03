@@ -65,3 +65,5 @@ anchor -i .github/workflows/ci.yml .github/workflows/release.yml
 `--update` ignores named tags (`zola`) and prereleases (`v3.0.0-rc.1`). Actions without a semver tag stay unchanged and print a warning. Repositories with many tags need several API requests, so set `GITHUB_TOKEN` to avoid rate limits.
 
 When printing multiple files to stdout, each file is preceded by a `# <path>` comment.
+
+While actions are resolved, a progress bar is shown on stderr if it is a terminal. It disappears when done and never ends up in redirected output.

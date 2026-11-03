@@ -30,16 +30,20 @@ func run(ctx context.Context, client *github.Client, cfg config, args []string, 
 		return err
 	}
 
-	resolver := newResolver(client, cfg.workers)
 	workflows := make([]*workflow, 0, len(paths))
+	var targets []target
 	for _, path := range paths {
 		wf, err := loadWorkflow(path, cfg)
 		if err != nil {
 			return err
 		}
 		workflows = append(workflows, wf)
-		resolver.submit(ctx, wf.targets())
+		targets = append(targets, wf.targets()...)
 	}
+
+	bar := newProgressBar(os.Stderr, isTerminal(os.Stderr))
+	resolver := newResolver(client, bar, cfg.workers)
+	resolver.submit(ctx, targets)
 	resolved := resolver.wait()
 
 	for _, wf := range workflows {
