@@ -10,3 +10,7 @@ build:
 # install the binary
 install:
     go install -ldflags="{{ ldflags }}"
+
+# run the linter
+lint:
+    golangci-lint run
