@@ -12,6 +12,16 @@ Pin GitHub Actions `uses:` directives to their exact commit SHA.
 
 ## Install
 
+The preferred way is to clone the repository and install with [just](https://github.com/casey/just), because this embeds the commit and version in the binary:
+
+```sh
+git clone https://github.com/npikall/anchor.git
+cd anchor
+just install
+```
+
+Alternatively, install with `go install`. The binary then only reports the module version, without the commit:
+
 ```sh
 go install github.com/npikall/anchor@latest
 ```
